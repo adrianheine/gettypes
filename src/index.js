@@ -454,7 +454,9 @@ class Gatherer {
 
     let internal = ts.isInternalDeclaration(node, node.getSourceFile())
     if (internal && node.kind !== ts.SyntaxKind.Parameter && node.kind !== ts.SyntaxKind.Constructor) return
-    const [name, value] = this[ts.SyntaxKind[node.kind]](node, context)
+    let result = this[ts.SyntaxKind[node.kind]](node, context)
+    if (!result) return
+    const [name, value] = result
     let comment = this.getComments(node)
     // In this case, @internal only refers to the field, not the constructor parameter
     if (internal && node.kind === ts.SyntaxKind.Parameter && node.symbol.parent) {
@@ -503,7 +505,8 @@ class Gatherer {
     this.basedir = path.resolve(path.dirname(sourceFile.originalFileName))
     for (const exportSymbol of exports) {
       if (exportSymbol.declarations.length !== 1) console.warn(exportSymbol)
-      items[exportSymbol.escapedName] = {exported: true, ...this.callHandler(exportSymbol.declarations[0], context)[1]}
+      let result = this.callHandler(exportSymbol.declarations[0], context)
+      if (result) items[exportSymbol.escapedName] = {exported: true, ...result[1]}
     }
     return items
   }
