@@ -202,12 +202,7 @@ class Gatherer {
 
   _registerUsageSymbol(symbol) {
     const name = symbol.escapedName
-    let source_path = null
-    if (symbol.parent && symbol.parent.flags & ts.SymbolFlags.ValueModule) {
-      source_path = symbol.parent.valueDeclaration.fileName
-    } else if (symbol.declarations.length) {
-      source_path = symbol.declarations[0].getSourceFile().fileName
-    } else console.warn(symbol)
+    let source_path = symbolPath(symbol)
     if (source_path && path.resolve(source_path).startsWith(this.basedir)) {
       if (!this.exportedSymbols.includes(name) && !this.inlining[name]) {
         console.warn(`Internal symbol ${name} used in public interface, but not exported, trying to inline …`)
@@ -437,7 +432,13 @@ class Gatherer {
     return [name, ret]
   }
   ExportSpecifier(node, context) {
-    return this.callHandler(this.typeChecker.getExportSpecifierLocalTargetSymbol(node).declarations[0], context)
+    let target = this.typeChecker.getExportSpecifierLocalTargetSymbol(node)
+    if (!symbolPath(target).startsWith(this.basedir)) {
+      this._registerUsageSymbol(target)
+      return [node.name.text, {type: "reexport", value: {type: target.escapedName}}]
+    } else {
+      return this.callHandler(target.declarations[0], context)
+    }
   }
 
   constructor(typeChecker) {
@@ -499,8 +500,8 @@ class Gatherer {
   gatherExports(sourceFile, items) {
     const context = new Context("")
     const exports = this.typeChecker.getExportsOfModule(sourceFile.symbol)
-    this.exportedSymbols = exports.map(s => s.escapedName)
     this.basedir = path.resolve(path.dirname(sourceFile.originalFileName))
+    this.exportedSymbols = exports.map(s => s.escapedName)
     for (const exportSymbol of exports) {
       if (exportSymbol.declarations.length !== 1) console.warn(exportSymbol)
       items[exportSymbol.escapedName] = {exported: true, ...this.callHandler(exportSymbol.declarations[0], context)[1]}
@@ -514,6 +515,17 @@ function getTSProgram(fileName) {
   const host = ts.createCompilerHost({})
   const {options} = configPath ? ts.getParsedCommandLineOfConfigFile(configPath, undefined, host) : {}
   return ts.createProgram({ rootNames: [fileName], options, host })
+}
+
+function symbolPath(symbol) {
+  if (symbol.parent && symbol.parent.flags & ts.SymbolFlags.ValueModule) {
+    return symbol.parent.valueDeclaration.fileName
+  } else if (symbol.declarations.length) {
+    return symbol.declarations[0].getSourceFile().fileName
+  } else {
+    console.warn("No path for ", symbol)
+    return null
+  }
 }
 
 exports.gather = ({filename, items = Object.create(null)}) => {
