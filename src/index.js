@@ -192,6 +192,13 @@ class Gatherer {
   UnionType(node, context) {
     return [null, {type: "union", typeParams: this.handleNodes(node.types, context, [])}]
   }
+  TypeOperator(node, context) {
+    let type = this.takeUnnamed(node.type, context)
+    // FIXME handle other operators? Need to find out what other values this can have
+    if (ts.SyntaxKind[node.operator] == "ReadonlyKeyword")
+      type.readonly = true
+    return [null, type]
+  }
 
   _registerUsageType(type) {
     if (type.aliasSymbol) this._registerUsageSymbol(type.aliasSymbol)
