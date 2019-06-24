@@ -135,6 +135,8 @@ class Gatherer {
   NullKeyword() { return this._simple("null") } // FIXME: Is this correct?
   VoidKeyword() { return this._simple("void") } // FIXME: Nope
   UndefinedKeyword() { return this._simple("undefined") }
+  FalseKeyword() { return this._simple("false") }
+  TrueKeyword() { return this._simple("false") }
   ThisType(node, context) { return this._simple(context.thisContext) }
   IndexSignature(node, context) {
     // FIXME: This is pretty horrible
