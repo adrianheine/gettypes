@@ -5,54 +5,14 @@ import {
   isClassLike, isInterfaceDeclaration,
   TypeChecker,
   Symbol, SymbolFlags, ModifierFlags,
-  Type, TypeFlags, ObjectType, TypeReference, ObjectFlags, LiteralType, UnionOrIntersectionType, Signature, IndexType, IndexedAccessType,
+  Type as TSType, TypeFlags, ObjectType, TypeReference as TSTypeReference, ObjectFlags, LiteralType, UnionOrIntersectionType, Signature, IndexType, IndexedAccessType,
   Node, SyntaxKind, UnionOrIntersectionTypeNode, MappedTypeNode,
   Declaration, NamedDeclaration, TypeParameterDeclaration, ParameterDeclaration, EnumDeclaration, VariableDeclaration, ConstructorDeclaration
 } from "typescript"
 
+import {Binding, Type as OutputType, CallableType, Class, Enum, Function as OutputFunction, Interface, Item, Param, Object as OutputObject, SourceDataHolder, TypeReference, TypeParam, TypeParamsHolder} from "./schema"
+
 const {resolve, dirname, relative} = require("path")
-
-type BindingKind = "class" | "enum" | "enummember" | "interface" | "variable" | "property" | "method" |
-  "typealias" | "typeparam" | "constructor" | "function" | "parameter" | "reexport"
-
-type Loc = {file: string, line: number, column: number}
-
-type Binding = {
-  kind: BindingKind,
-  id: string,
-  description?: string,
-  loc?: Loc,
-  abstract?: boolean,
-  readonly?: boolean,
-  optional?: boolean
-}
-
-type BindingType = {
-  type: string,
-  typeSource?: string, // missing means this is a built-in type
-  typeParamSource?: string,
-  properties?: {[name: string]: Item},
-  instanceProperties?: {[name: string]: Item},
-  typeArgs?: readonly BindingType[],
-  typeParams?: readonly Param[],
-  params?: readonly Param[],
-  returns?: BindingType,
-  extends?: BindingType,
-  implements?: readonly BindingType[],
-  construct?: Item
-}
-
-type Param = BindingType & {
-  name?: string,
-  id: string,
-  description?: string,
-  loc?: Loc,
-  optional?: boolean,
-  rest?: boolean,
-  default?: string
-}
-
-type Item = Binding & BindingType
 
 class Context {
   constructor(readonly tc: TypeChecker,
@@ -83,7 +43,7 @@ class Context {
   }
 
   itemForSymbol(symbol: Symbol): Item | null {
-    let kind: BindingKind
+    let kind: Binding["kind"]
 
     if (symbol.flags & SymbolFlags.Alias) {
       let aliased = this.tc.getAliasedSymbol(symbol)
@@ -122,13 +82,13 @@ class Context {
     let typeDesc = kind == "enum" ? cx.getEnumType(symbol)
       : kind == "reexport" ? cx.getReferenceType(this.tc.getAliasedSymbol(symbol))
       : cx.getType(type, symbol)
-    if (params) typeDesc.typeParams = params
+    if (params) (typeDesc as TypeParamsHolder).typeParams = params
 
     return {...binding, ...typeDesc}
   }
 
-  getEnumType(symbol: Symbol): BindingType {
-    let properties: {[name: string]: Item} = {}
+  getEnumType(symbol: Symbol): Enum {
+    let properties: Enum["properties"] = {}
     this.gatherSymbols((decl(symbol) as EnumDeclaration).members
                        .map(member => this.tc.getSymbolAtLocation(member.name)!), properties)
     for (let n in properties) {
@@ -138,7 +98,7 @@ class Context {
     return {type: "enum", properties}
   }
 
-  getType(type: Type, forSymbol?: Symbol): BindingType {
+  getType(type: TSType, forSymbol?: Symbol): OutputType {
     if (type.aliasSymbol && !(forSymbol && (forSymbol.flags & SymbolFlags.TypeAlias)) && this.isAvailable(type.aliasSymbol))
       return this.getReferenceType(type.aliasSymbol, type.aliasTypeArguments)
 
@@ -188,14 +148,14 @@ class Context {
       let objFlags = (type as ObjectType).objectFlags
 
       if (forSymbol && (forSymbol.flags & SymbolFlags.Class)) return this.getClassType(type as ObjectType)
-      if (forSymbol && (forSymbol.flags & SymbolFlags.Interface)) return this.getObjectType(type as ObjectType, forSymbol)
+      if (forSymbol && (forSymbol.flags & SymbolFlags.Interface)) return this.getInterfaceType(type as ObjectType, forSymbol)
 
       if (!((objFlags & ObjectFlags.Reference) && type.symbol && this.isAvailable(type.symbol))) {
         // Tuples have a weird structure where they point as references at a generic tuple type
         if (objFlags & ObjectFlags.Reference) {
-          let target = (type as TypeReference).target
+          let target = (type as TSTypeReference).target
           if ((target.flags & TypeFlags.Object) && ((target as ObjectType).objectFlags & ObjectFlags.Tuple))
-            return {type: "tuple", typeArgs: (type as TypeReference).typeArguments!.map(t => this.getType(t))}
+            return {type: "tuple", typeArgs: (type as TSTypeReference).typeArguments!.map(t => this.getType(t))}
         }
         if (objFlags & ObjectFlags.Mapped) {
           let decl = maybeDecl(type.symbol), innerType = decl && (decl as MappedTypeNode).type
@@ -203,7 +163,7 @@ class Context {
         }
 
         let call = type.getCallSignatures(), strIndex = type.getStringIndexType(), numIndex = type.getNumberIndexType()
-        if (call.length) return this.addCallSignature(call[0], {type: "Function"})
+        if (call.length) return this.addCallSignature(call[0], {type: "Function"} as OutputFunction)
         if (strIndex) return {type: "Object", typeArgs: [this.getType(strIndex)]}
         if (numIndex) return {type: "Array", typeArgs: [this.getType(numIndex)]}
 
@@ -216,17 +176,17 @@ class Context {
         }
       }
 
-      return this.getReferenceType(type.symbol, (type as TypeReference).typeArguments, type)
+      return this.getReferenceType(type.symbol, (type as TSTypeReference).typeArguments, type)
     }
 
     throw new Error(`Unsupported type ${this.tc.typeToString(type)} with flags ${type.flags}`)
   }
 
-  getObjectType(type: ObjectType, interfaceSymbol?: Symbol): BindingType {
-    let out: BindingType = {type: interfaceSymbol ? "interface" : "Object"}
+  getInterfaceType(type: ObjectType, interfaceSymbol: Symbol): Interface {
+    let out: Interface = {type: "interface"}
 
     let call = type.getCallSignatures(), props = type.getProperties()
-    let intDecl = interfaceSymbol && maybeDecl(interfaceSymbol)
+    let intDecl = maybeDecl(interfaceSymbol)
     if (intDecl && isInterfaceDeclaration(intDecl)) {
       let declared = intDecl.members.filter(member => member.name).map(member => this.tc.getSymbolAtLocation(member.name!)!.name)
       props = props.filter(prop => declared.includes(prop.name))
@@ -240,8 +200,17 @@ class Context {
     return out
   }
 
-  getClassType(type: ObjectType): BindingType {
-    let out: BindingType = {type: "class"}
+  getObjectType(type: ObjectType): OutputObject {
+    let out: OutputObject = {type: "Object"}
+    let call = type.getCallSignatures(), props = type.getProperties()
+    if (call.length) this.addCallSignature(call[0], out)
+    let propObj = this.gatherSymbols(props)
+    if (propObj) out.properties = propObj
+    return out
+  }
+
+  getClassType(type: ObjectType): Class {
+    let out: Class = {type: "class"}
     let classDecl = type.symbol.valueDeclaration
     if (!isClassLike(classDecl)) throw new Error("Class decl isn't class-like")
 
@@ -293,13 +262,13 @@ class Context {
     return out
   }
 
-  getReferenceType(symbol: Symbol, typeArgs?: readonly Type[], arityType?: Type) {
-    let result: BindingType = {type: symbol.name}
+  getReferenceType(symbol: Symbol, typeArgs?: readonly TSType[], arityType?: TSType) {
+    let result: TypeReference = {type: symbol.name}
     let typeSource = this.nodePath(decl(symbol))
     if (!isBuiltin(typeSource)) result.typeSource = typeSource
     if (typeArgs) {
       if (arityType) {
-        let targetParams = (arityType as TypeReference).target.typeParameters
+        let targetParams = (arityType as TSTypeReference).target.typeParameters
         typeArgs = typeArgs.slice(0, targetParams ? targetParams.length : 0)
       }
       if (typeArgs.length) result.typeArgs = typeArgs.map(arg => this.getType(arg))
@@ -330,13 +299,13 @@ class Context {
     })
   }
 
-  getTypeParams(decl: Node): Param[] | null {
+  getTypeParams(decl: Node): TypeParam[] | null {
     let params = (decl as any).typeParameters as TypeParameterDeclaration[]
     let cx: Context = this
     return !params ? null : params.map(param => {
       let sym = cx.tc.getSymbolAtLocation(param.name)!
       let localCx = cx.extend(sym)
-      let result: Param = {type: "typeparam", name: sym.name, id: localCx.id}
+      let result: TypeParam = {type: "typeparam", name: sym.name, id: localCx.id}
       this.addSourceData([param], result)
       let constraint = getEffectiveConstraintOfTypeParameter(param), type
       if (constraint && (type = localCx.tc.getTypeAtLocation(constraint)))
@@ -348,7 +317,7 @@ class Context {
     })
   }
 
-  addCallSignature(signature: Signature, target: BindingType) {
+  addCallSignature<C extends CallableType>(signature: Signature, target: C) {
     let cx: Context = this
     let typeParams = signature.typeParameters && this.getTypeParams(signature.getDeclaration())
     if (typeParams) {
@@ -372,7 +341,7 @@ class Context {
     return relative(process.cwd(), node.getSourceFile().fileName)
   }
 
-  addSourceData(nodes: readonly Node[], target: Binding | Param, comments = true) {
+  addSourceData(nodes: readonly Node[], target: SourceDataHolder, comments = true) {
     if (comments) {
       let comment = ""
       for (let node of nodes) {
