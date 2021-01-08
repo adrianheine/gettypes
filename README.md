@@ -1,3 +1,6 @@
+**NOTE**: Further development of this project is happening at
+[marijnh/getdocs-ts](https://github.com/marijnh/getdocs-ts/)
+
 # gettypes
 
 This is a tool for extracting documentation and typing information from TypeScript sources.
